@@ -10,9 +10,13 @@ import (
 	"github.com/weirdmansmr/go_test/middleware"
 )
 
-type Employee struct {
+type BankAccount struct {
     ID       int    `json:"id"`
     Money    int    `json:"money"`
+}
+
+type SumValue struct {
+	Sum int `json:"sum"`
 }
 
 func connectDB() (*sql.DB, error) {
@@ -27,7 +31,7 @@ func connectDB() (*sql.DB, error) {
     return db, nil
 }
 
-func getEmployees(c echo.Context) error {
+func getBankAccount(c echo.Context) error {
     db, err := connectDB()
     if err != nil {
         return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
@@ -40,29 +44,64 @@ func getEmployees(c echo.Context) error {
     }
     defer rows.Close()
 
-    var employees []Employee
+    var bank []BankAccount
 
     for rows.Next() {
-        var e Employee
-        if err := rows.Scan(&e.ID, &e.Money); err != nil {
+        var b BankAccount
+        if err := rows.Scan(&b.ID, &b.Money); err != nil {
             return echo.NewHTTPError(http.StatusInternalServerError, fmt.Sprintf("error scanning rows: %v", err))
         }
-        employees = append(employees, e)
+        bank = append(bank, b)
     }
 
     if err := rows.Err(); err != nil {
         return echo.NewHTTPError(http.StatusInternalServerError, fmt.Sprintf("error iterating over rows: %v", err))
     }
 
-    return c.JSON(http.StatusOK, employees)
+    return c.JSON(http.StatusOK, bank)
+}
+
+func updateBankAccount(c echo.Context) error {
+    db, err := connectDB()
+    if err != nil {
+        return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+    }
+    defer db.Close()
+
+    var currentMoney int
+    err = db.QueryRow("SELECT money FROM public.bank_account WHERE id = 1").Scan(&currentMoney)
+    if err != nil {
+        return echo.NewHTTPError(http.StatusInternalServerError, fmt.Sprintf("error getting current money value: %v", err))
+    }
+
+    var sumValue SumValue
+	if err := c.Bind(&sumValue); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid request body")
+	}
+
+    if userRole := c.Request().Header.Get("User-Role"); userRole == "admin" {
+        _, err = db.Exec("UPDATE public.bank_account SET money = $1 WHERE id = 1", currentMoney + sumValue.Sum)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, fmt.Sprintf("error updating employee money: %v", err))
+	}
+    } else if userRole == "client" {
+        if sumValue.Sum > currentMoney {
+            return echo.NewHTTPError(http.StatusForbidden, "Insufficient funds")
+        } else {
+            _, err = db.Exec("UPDATE public.bank_account SET money = $1 WHERE id = 1", currentMoney - sumValue.Sum)
+        }
+    }
+
+    return c.JSON(http.StatusOK, "s")
 }
 
 func main() {
     e := echo.New()
 
-		e.Use(middleware.CheckUserRole("admin"))
-		
-    e.GET("/bank", getEmployees)
+	e.Use(middleware.CheckUserRole())
+	
+    e.GET("/bank", getBankAccount)
+    e.POST("/bankPost", updateBankAccount)
 
     fmt.Println("Server is running on port 8080")
     e.Logger.Fatal(e.Start(":8080"))
